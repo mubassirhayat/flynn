@@ -16,6 +16,8 @@ import (
 	"github.com/flynn/flynn/host/ports"
 	"github.com/flynn/flynn/host/sampi"
 	"github.com/flynn/flynn/host/types"
+	"github.com/flynn/flynn/host/volume"
+	zfsVolume "github.com/flynn/flynn/host/volume/zfs"
 	"github.com/flynn/flynn/pkg/attempt"
 	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/flynn/pkg/shutdown"
@@ -156,9 +158,19 @@ func runDaemon(args *docopt.Args) {
 	var backend Backend
 	var err error
 
+	// create default volume backend and minimum viable storage pool
+	// TODO: need to collect config or cli flags for either initializable params if the min-viable zpool doesn't already exist or if the default is overriden
+	volProv, err := zfsVolume.NewProvider(&zfsVolume.ProviderConfig{DatasetName: "flynn-default"})
+	if err != nil {
+		log.Fatalf("unable to create volume backend: %s", err)
+	}
+
+	// create volume manager
+	vman := volume.NewManager(volProv)
+
 	switch backendName {
 	case "libvirt-lxc":
-		backend, err = NewLibvirtLXCBackend(state, volPath, "/tmp/flynn-host-logs", flynnInit)
+		backend, err = NewLibvirtLXCBackend(state, vman, volPath, "/tmp/flynn-host-logs", flynnInit)
 	default:
 		log.Fatalf("unknown backend %q", backendName)
 	}
@@ -166,7 +178,7 @@ func runDaemon(args *docopt.Args) {
 		sh.Fatal(err)
 	}
 
-	router, err := serveHTTP(&Host{state: state, backend: backend}, &attachHandler{state: state, backend: backend}, sh)
+	router, err := serveHTTP(&Host{state: state, backend: backend}, &attachHandler{state: state, backend: backend}, vman, sh)
 	if err != nil {
 		sh.Fatal(err)
 	}

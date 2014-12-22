@@ -42,7 +42,7 @@ func JobConfig(f *ct.ExpandedFormation, name string) *host.Job {
 		job.Config.Ports[i].Port = p.Port
 		job.Config.Ports[i].RangeEnd = p.RangeEnd
 	}
-	if t.Data {
+	if t.Data { // REVIEW: we can't remove this outright... but should it be replaced with volumes?  and is this method of triggering it something we want to retain, or was it a one-off implementation hack that should leave now?
 		job.Config.Mounts = []host.Mount{{Location: "/data", Writeable: true}}
 	}
 	return job

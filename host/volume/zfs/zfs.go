@@ -8,40 +8,51 @@ import (
 	"time"
 
 	zfs "github.com/flynn/flynn/Godeps/_workspace/src/github.com/mistifyio/go-zfs"
-	"github.com/flynn/flynn/host/types"
 	"github.com/flynn/flynn/host/volume"
 	"github.com/flynn/flynn/pkg/random"
 )
 
 type zfsVolume struct {
-	id        string
+	info      *volume.Info
 	mounts    map[volume.VolumeMount]struct{}
+	// FIXME: starting to look better to put this back in the hands of the provider, and making all of the challenges of maintaining entanglement with external state confined to that.
 	poolName  string // The name of the zpool this storage is cut from.  (We need this when forking snapshots, or doing some inspections.)
 	basemount string // This is the location of the main mount of the ZFS dataset.  Mounts into containers are bind-mounts pointing back out to this.  The user does not control it (it is essentially an implementation detail).
 }
 
 type Provider struct {
-	poolName string
+	config *ProviderConfig
 }
 
-func NewProvider(poolName string) (volume.Provider, error) {
+/*
+	Stores zfs config used at setup time.
+
+	`volume.ProviderSpec.Config` is deserialized to this for zfs.
+*/
+type ProviderConfig struct {
+	Vdev string // TODO: this is going to be complicated in itself; it's either a dataset name from a presumed-existing zpool, or a request to do file provisioning
+	// on the plus side, i don't think we have any earthly reason to support zpool creation directly (if you have a fancy hardware setup, you're likely able to manage that yourself).
+	DatasetName string
+}
+
+func NewProvider(config *ProviderConfig) (volume.Provider, error) {
 	if _, err := exec.LookPath("zfs"); err != nil {
 		return nil, fmt.Errorf("zfs command is not available")
 	}
 	return &Provider{
-		poolName: poolName,
+		config: config,
 	}, nil
 }
 
 func (b Provider) NewVolume() (volume.Volume, error) {
 	id := random.UUID()
 	v := &zfsVolume{
-		id:        id,
+		info:      &volume.Info{ID: id},
 		mounts:    make(map[volume.VolumeMount]struct{}),
-		poolName:  b.poolName,
+		poolName:  b.config.DatasetName,
 		basemount: filepath.Join("/var/lib/flynn/volumes/zfs/", id),
 	}
-	if _, err := zfs.CreateFilesystem(path.Join(v.poolName, v.id), map[string]string{
+	if _, err := zfs.CreateFilesystem(path.Join(v.poolName, id), map[string]string{
 		"mountpoint": v.basemount,
 	}); err != nil {
 		return nil, err
@@ -49,36 +60,35 @@ func (b Provider) NewVolume() (volume.Volume, error) {
 	return v, nil
 }
 
-func (v *zfsVolume) ID() string {
-	return v.id
+func (v *zfsVolume) Info() *volume.Info {
+	return v.info
 }
 
 func (v *zfsVolume) Mounts() map[volume.VolumeMount]struct{} {
 	return v.mounts
 }
 
-func (v *zfsVolume) Mount(job host.ActiveJob, path string) (volume.VolumeMount, error) {
+func (v *zfsVolume) Mount(jobId, path string) (string, error) {
 	mount := volume.VolumeMount{
-		JobID:    job.Job.ID,
+		JobID:    jobId,
 		Location: path,
 	}
 	if _, exists := v.mounts[mount]; exists {
-		return volume.VolumeMount{}, fmt.Errorf("volume: cannot make same mount twice!")
+		return "", fmt.Errorf("volume: cannot make same mount twice!")
 	}
-	// TODO: fire syscalls
 	v.mounts[mount] = struct{}{}
-	return mount, nil
+	return v.basemount, nil
 }
 
 func (v1 *zfsVolume) TakeSnapshot() (volume.Volume, error) {
 	id := random.UUID()
 	v2 := &zfsVolume{
-		id:        id,
+		info:      &volume.Info{ID: id},
 		mounts:    make(map[volume.VolumeMount]struct{}),
 		poolName:  v1.poolName,
 		basemount: filepath.Join("/var/lib/flynn/volumes/zfs/", id),
 	}
-	if err := cloneFilesystem(path.Join(v2.poolName, v2.id), path.Join(v1.poolName, v1.id), v2.basemount); err != nil {
+	if err := cloneFilesystem(path.Join(v2.poolName, v2.info.ID), path.Join(v1.poolName, v1.info.ID), v2.basemount); err != nil {
 		return nil, err
 	}
 	return v2, nil

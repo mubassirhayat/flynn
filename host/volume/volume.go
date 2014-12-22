@@ -1,9 +1,5 @@
 package volume
 
-import (
-	"github.com/flynn/flynn/host/types"
-)
-
 /*
 	A Volume is a persistent and sharable filesystem.  Unlike most of the filesystem in a job's
 	container, which is ephemeral and is discarded after job termination, Volumes can be used to
@@ -20,15 +16,25 @@ import (
 	the API from a higher level service).
 */
 type Volume interface {
-	ID() string // guid (v4, random.  not globally sync'd, entropy should be high enough to be unique)
+	Info() *Info
 
 	Mounts() map[VolumeMount]struct{}
 
-	// Note: NOT provided: a method that gets the host's path to a mount.  Not all backends have such a useable raw path on the host.
-
-	Mount(job host.ActiveJob, path string) (VolumeMount, error)
+	// Inform the volume that it is being mounted.  (The returned information is used by the host backend to create the mount.)
+	Mount(jobId, path string) (string, error)
 
 	TakeSnapshot() (Volume, error)
+}
+
+/*
+	`volume.Info` names and describes info about a volume.
+	It is a serializable structure intended for API use.
+*/
+type Info struct {
+	// Volumes have a unique identifier.
+	// These are guid formatted (v4, random); selected by the server;
+	// and though not globally sync'd, entropy should be high enough to be unique.
+	ID string `json:"id"`
 }
 
 /*

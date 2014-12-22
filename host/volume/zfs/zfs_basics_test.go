@@ -32,13 +32,34 @@ apt-get install -y ubuntu-zfs
 
 this drags in g++, and proceeds to spend a large number of seconds on "Building initial module for 3.13.0-43-generic"...
 okay, minutes.  ugh.
+but, this one gives the better experience and much better performance.
+
+
+sample commands to set up a zpool
+---------------------------------
+
+dd if=/dev/zero of=/tmp/zvdev count=1k bs=64k
+zpool create demopool -mnone /tmp/zvdev
+zfs create -o mountpoint=/tmp/zdemo demopool/zdemo
+# now inspect with:
+ls -la /tmp/zdemo
+zpool list
+zfs list
+# later:
+zfs destroy -d demopool/zdemo # well... the go-zfs package does this, but it doesn't appear to do much.  """cannot open 'demopool/zdemo': operation not applicable to datasets of this type""" when I do it manually.  maybe should file a bug for that.
+zpool destroy demopool
+
+# note: you can force unmounting a "busy" filesystem with `umount -l` (not '-f' as one might normally expect).
+# this may leave processes in odd states, still able to write to files, though those files are invisible if you're `ls`'ing around
+# ohhhhh boy.  no, this is just another form of lie.  that's a "lazy" unmount -- it leaves the filesystem busy nonetheless.  after that you can't even remount it, comically.
+
 */
 
 //
 
 func (S) TestSnapshotShouldCarryFiles(c *C) {
 	err := WithTmpfileZpool("testpool", func() error {
-		provider, err := NewProvider("testpool")
+		provider, err := NewProvider(&ProviderConfig{DatasetName: "testpool"})
 		if err != nil {
 			return err
 		}
@@ -75,7 +96,7 @@ func (S) TestSnapshotShouldCarryFiles(c *C) {
 
 func (S) TestSnapshotShouldIsolateNewChangesToSource(c *C) {
 	err := WithTmpfileZpool("testpool", func() error {
-		provider, err := NewProvider("testpool")
+		provider, err := NewProvider(&ProviderConfig{DatasetName: "testpool"})
 		if err != nil {
 			return err
 		}
@@ -117,7 +138,7 @@ func (S) TestSnapshotShouldIsolateNewChangesToSource(c *C) {
 
 func (S) TestSnapshotShouldIsolateNewChangesToFork(c *C) {
 	err := WithTmpfileZpool("testpool", func() error {
-		provider, err := NewProvider("testpool")
+		provider, err := NewProvider(&ProviderConfig{DatasetName: "testpool"})
 		if err != nil {
 			return err
 		}

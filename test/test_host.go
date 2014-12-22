@@ -77,7 +77,8 @@ func (s *HostSuite) TestNetworkedPersistentJob(t *c.C) {
 			},
 		},
 	})
-	cmd.Start()
+	err := cmd.Start()
+	t.Assert(err, c.IsNil)
 	defer cmd.Kill()
 
 	// get the ip:port that that job exposed.
@@ -97,4 +98,111 @@ func (s *HostSuite) TestNetworkedPersistentJob(t *c.C) {
 	t.Assert(err, c.IsNil)
 
 	t.Assert(string(body), c.Equals, "echocococo\n")
+}
+
+func (s *HostSuite) TestVolumeCreation(t *c.C) {
+	h := s.anyHostClient(t)
+
+	vol, err := h.CreateVolume("default")
+	t.Assert(err, c.IsNil)
+	t.Assert(vol.ID, c.Not(c.Equals), "")
+}
+
+func (s *HostSuite) TestVolumeCreationFailsForNonexistantProvider(t *c.C) {
+	h := s.anyHostClient(t)
+
+	vol, err := h.CreateVolume("non-existent")
+	t.Assert(err, c.NotNil)
+	t.Assert(vol.ID, c.Equals, "")
+}
+
+func (s *HostSuite) TestVolumePersistence(t *c.C) {
+	// most of the volume tests (snapshotting, quotas, etc) are unit tests under their own package.
+	// these tests exist to cover the last mile where volumes are bind-mounted into containers.
+
+	cluster := s.clusterClient(t)
+
+	// TODO: create a volume!
+	// we need to generate all the API for that.
+	// this might be better done after the (large) work in converting the host API to http lands.
+	// UNLESS we code a special case for automatically creating volumes when the host.Job.Config.Volume has an autocreate flag set.
+	// but that's a separate thing to design and test all its own.  current iteration is not expected to allow choice of names.
+
+	// FIXME: yes, there's massive code duplication here.  boil it down later.
+
+	// run a job that accepts tcp connections and performs tasks we ask of it in its container
+	serviceName := "ish-service-" + random.String(6)
+	cmd := exec.JobUsingCluster(cluster, exec.DockerImage(imageURIs["test-apps"]), &host.Job{
+		Config: host.ContainerConfig{
+			Cmd:   []string{"/bin/ish"},
+			Ports: []host.Port{{Proto: "tcp"}},
+			Env: map[string]string{
+				"NAME": serviceName,
+			},
+			Volumes: []host.VolumeBinding{{
+				Target:    "/vol",
+				VolumeID:  "tehID",
+				Writeable: true,
+			}},
+		},
+	})
+	// FIXME: FILE BUG, this does not give the slightest hint of failure!!
+	err := cmd.Start()
+	t.Assert(err, c.IsNil)
+	fmt.Printf("::: job 1: %s\n", cmd.Job.ID)
+	defer cmd.Kill()
+
+	// get the ip:port that that job exposed.
+	// phone discoverd and ask by serviceName -- we set a unique one so this works with concurrent tests.
+	services, err := discoverd.Services(serviceName, time.Second*100)
+	t.Assert(err, c.IsNil)
+	t.Assert(services, c.HasLen, 1)
+
+	resp, err := http.Post(
+		fmt.Sprintf("http://%s/ish", services[0].Addr),
+		"text/plain",
+		strings.NewReader("echo 'testcontent' > /vol/alpha ; echo $?"),
+	)
+	t.Assert(err, c.IsNil)
+	body, err := ioutil.ReadAll(resp.Body)
+	t.Assert(err, c.IsNil)
+	t.Assert(string(body), c.Equals, "0\n")
+
+	// start another one that mounts the same volume
+	serviceName = "ish-service-" + random.String(6)
+	cmd = exec.JobUsingCluster(cluster, exec.DockerImage(imageURIs["test-apps"]), &host.Job{
+		Config: host.ContainerConfig{
+			Cmd:   []string{"/bin/ish"},
+			Ports: []host.Port{{Proto: "tcp"}},
+			Env: map[string]string{
+				"NAME": serviceName,
+			},
+			Volumes: []host.VolumeBinding{{
+				Target:    "/vol",
+				VolumeID:  "tehID",
+				Writeable: false,
+			}},
+		},
+	})
+	err = cmd.Start()
+	t.Assert(err, c.IsNil)
+	fmt.Printf("::: job 2: %s\n", cmd.Job.ID)
+	defer cmd.Kill()
+
+	// get the ip:port that that job exposed.
+	// phone discoverd and ask by serviceName -- we set a unique one so this works with concurrent tests.
+	services, err = discoverd.Services(serviceName, time.Second*100)
+	t.Assert(err, c.IsNil)
+	t.Assert(services, c.HasLen, 1)
+
+	resp, err = http.Post(
+		fmt.Sprintf("http://%s/ish", services[0].Addr),
+		"text/plain",
+		strings.NewReader("cat /vol/alpha"),
+	)
+	t.Assert(err, c.IsNil)
+	body, err = ioutil.ReadAll(resp.Body)
+	t.Assert(err, c.IsNil)
+
+	t.Assert(string(body), c.Equals, "testcontent\n")
 }
